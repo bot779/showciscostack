@@ -1,0 +1,143 @@
+#!/bin/sh
+# showciscostack
+#   show the "health" of a cisco switch stack
+#   works for 3750 and 2960 stacks
+
+SHOWOID=false
+
+
+while echo $1 |grep "^-" >/dev/null
+do
+  case $1 in
+    "--showoid" )
+      SHOWOID=true
+      shift
+      ;;
+    "--community" | "-c" )
+      COMMUNITY="$2"
+      shift;shift
+      ;;
+    "--help" | "-?" | "-h" | * )
+      echo Usage:
+      echo $0 "[OPTIONS] [<switch-IP>]"
+      echo OPTIONS:
+      echo "--help -? -h"
+      echo "--showoid ;# show ifOperStatus OIDs instead of querying them"
+      #echo "--community <community> ;# use the specified community string"
+      exit
+      ;;
+  esac
+done
+
+SWITCHIP=${1:-192.168.1.53}
+COMMUNITY=${COMMUNITY:-"public"}
+
+FIRSTOID="1.3.6.1.2.1.2.2.1.2"
+
+
+echo "checking stack ports on ${SWITCHIP}"
+
+# read interface descriptions and
+# find indexes related to "Stack" ports
+
+snmpwalk -On -c ${COMMUNITY} -v 2c ${SWITCHIP} ${FIRSTOID} \
+| fgrep Stack \
+| sed -e 's/\.\([^. ]*\) =/ \1 =/' \
+| while read OID INDEX EQ STRING IFDESCR
+do
+  if $SHOWOID
+  then
+    echo -e "$IFDESCR \t STATUSOID: $OID.8.$INDEX"
+  else
+    # read admin and operational status values
+    IFADMINSTATUS=`snmpwalk -On -Ov -c ${COMMUNITY} -v 2c ${SWITCHIP} 1.3.6.1.2.1.2.2.1.7.$INDEX`
+    IFOPERSTATUS=`snmpwalk -On -Ov -c ${COMMUNITY} -v 2c ${SWITCHIP} 1.3.6.1.2.1.2.2.1.8.$INDEX`
+    echo -e "$IFDESCR \t $IFADMINSTATUS $IFOPERSTATUS \t\t STATUSOID: $OID.8.$INDEX"
+  fi
+  #echo
+done \
+| if $SHOWOID
+then
+  sed -e 's/INTEGER://g' \
+      -e 's/^StackSub-St\(.\)-\(.\)/switch\1-stackport\2/'
+else
+  sed -e 's/INTEGER://g' \
+      -e 's/^StackSub-St\(.\)-\(.\)/switch\1-stkpt\2/'
+fi
+
+# note: it might be quicker to read *everything* under 1.3.6.1.2.1.2.2.1
+# and *then* filter out the interesting information.
+# but thats not how I did it.
+
+
+
+echo
+echo "checking power supplies on ${SWITCHIP}"
+
+OID1="1.3.6.1.4.1.9.9.13.1.5.1.3"
+OID2="1.3.6.1.4.1.9.9.13.1.5.1.2"
+
+
+(snmpwalk -On -c ${COMMUNITY} -v 2c ${SWITCHIP} ${OID1}
+snmpwalk -On -c ${COMMUNITY} -v 2c ${SWITCHIP} ${OID2}
+) \
+| sed -e 's/\.\([^. ]*\) =/ \1 =/' \
+| sort -t" " -k2,2 -k1,1r \
+| while read OID INDEX EQ TYPE VALUE
+do
+  if [ "${OID}" = ".${OID1}" ]
+  then
+    echo -e "STATUS: $VALUE \c"
+  else
+    echo " DESCRIPTION: $VALUE STATUSOID: ${OID1}.${INDEX}"
+  fi
+done
+
+echo
+echo "checking fans on ${SWITCHIP}"
+
+OID1="1.3.6.1.4.1.9.9.13.1.4.1.3"
+OID2="1.3.6.1.4.1.9.9.13.1.4.1.2"
+
+(snmpwalk -On -c ${COMMUNITY} -v 2c ${SWITCHIP} ${OID1}
+snmpwalk -On -c ${COMMUNITY} -v 2c ${SWITCHIP} ${OID2}
+) \
+| sed -e 's/\.\([^. ]*\) =/ \1 =/' \
+| sort -t" " -k2,2 -k1,1r \
+| while read OID INDEX EQ TYPE VALUE
+do
+  if [ "${OID}" = ".${OID1}" ]
+  then
+    echo -e "STATUS: $VALUE \c"
+  else
+    echo " DESCRIPTION: $VALUE STATUSOID: ${OID1}.${INDEX}"
+  fi
+done
+
+echo
+echo "checking temperature on ${SWITCHIP}"
+
+OID1="1.3.6.1.4.1.9.9.13.1.3.1.6"
+OID2="1.3.6.1.4.1.9.9.13.1.3.1.3"
+LASTOID="1.3.6.1.4.1.9.9.13.1.3.1.2"
+
+(snmpwalk -On -c ${COMMUNITY} -v 2c ${SWITCHIP} ${OID1}
+snmpwalk -On -c ${COMMUNITY} -v 2c ${SWITCHIP} ${OID2}
+snmpwalk -On -c ${COMMUNITY} -v 2c ${SWITCHIP} ${LASTOID}
+) \
+| sed -e 's/\.\([^. ]*\) =/ \1 =/' \
+| sort -t" " -k2,2 -k1,1r \
+| while read OID INDEX EQ TYPE VALUE
+do
+  if [ "${OID}" = ".${OID1}" ]
+  then
+    echo -e "STATUS: $VALUE \c"
+  else
+    if [ "${OID}" = ".${LASTOID}" ]
+    then
+      echo " DESCRIPTION: $VALUE STATUSOID: ${OID1}.${INDEX}"
+    else
+      echo -e " VALUE: $VALUE\c"
+    fi
+  fi
+done
